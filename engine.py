@@ -1,99 +1,174 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
-# Fundamental object
-class phy_object():
-    # to create object please pass
-    # 1. Coordinates of masses
-    # 2. Masses themselfs
-    # 3. Adjacent table
-    # 4. K - table
-    # 5. g - force
-    def __init__(self, xy, ms, A, K, g, iscen=False):
-        self.xy = xy
-        self.v = np.zeros_like(self.xy)
-        self.ms = ms
-        self.A = A
-        self.K = K
-        self.g = g
-        self.iscen = iscen
-        self.dt = 0.01
-        self.l = np.zeros_like(A, dtype=float)
-        self.F = np.zeros_like(xy)
+"""
+Based on Philip Mocz (2021) implementation
+"""
 
-        for j in range(self.A.shape[1]):
-            p = self.xy - self.xy[self.A[:, j]]
-            self.l[:, j] = (p * p).sum(axis=1)
+# convert subindex (i,j) to linear index (idx)
+def sub2ind(array_shape, i, j):
+    idx = i * array_shape[1] + j
+    return idx
 
-    def step(self):
-        # F = -kx
-        F = np.zeros_like(self.l)
-        for j in range(self.A.shape[1]):
-            p = self.xy - self.xy[self.A[:, j]]
-            p_hat = p / np.linalg.norm(p, axis=1, keepdims=True)
-            F += self.K[:, [j]] * (self.l[:, [j]] - (p * p).sum(axis=1, keepdims=True)) * p_hat
 
-        self.F = F
-        self.a = F / self.ms[:, None] + self.g
+# calculate acceleration on nodes using hooke's law + gravity
+def getAcc(pos, vel, ci, cj, springL, spring_coeff, gravity):
+    # initialize
+    acc = np.zeros(pos.shape)
 
-        # apply for speed
-        self.v = self.v + self.a * self.dt
+    # Hooke's law: F = - k * displacement along spring
+    sep_vec = pos[ci, :] - pos[cj, :]
+    sep = np.linalg.norm(sep_vec, axis=1)
+    dL = sep - springL
+    ax = - spring_coeff * dL * sep_vec[:, 0] / sep
+    ay = - spring_coeff * dL * sep_vec[:, 1] / sep
+    np.add.at(acc[:, 0], ci, ax)
+    np.add.at(acc[:, 1], ci, ay)
+    np.add.at(acc[:, 0], cj, -ax)
+    np.add.at(acc[:, 1], cj, -ay)
 
-        # apply speed
-        self.xy = self.xy + self.v
+    # gravity
+    acc[:, 1] += gravity
 
-        # hit floor
-        self.xy[:, 1] = np.clip(self.xy[:, 1], a_min=0, a_max=100)
+    return acc
 
-    def show(self, ax, ax_aux):
-        l = np.zeros_like(self.l)
-        for j in range(self.A.shape[1]):
-            p = self.xy - self.xy[self.A[:, j]]
-            l[:, j] = (p * p).sum(axis=1)
 
-        color = self.l - l
-        color = 1 / (1 + np.exp(-0.6 * color))
-        color = color[..., None] * np.array([0, 0, 1]) + (1 - color[..., None]) * np.array([1, 0, 0])
+# apply box boundary conditions, reverse velocity if outside box
+def applyBoundary(pos, vel, boxsize):
+    for d in range(0, 2):
+        is_out = np.where(pos[:, d] < 0)
+        pos[is_out, d] *= -1
+        vel[is_out, d] *= -1
 
-        for i in range(self.A.shape[0]):
-            for j in range(self.A.shape[1]):
-                ax.plot([self.xy[i, 0], self.xy[self.A[i, j], 0]], [self.xy[i, 1], self.xy[self.A[i, j], 1]], c=color[i, j])
-            ax.plot([self.xy[i, 0], self.xy[i, 0] + self.F[i, 0]], [self.xy[i, 1], self.xy[i, 1] + self.F[i, 1]], c='g')
-        #ax.plot(*np.split(self.xy, 2, 1), c='b')
-        ax_aux.plot(np.linalg.norm(self.F, axis=1), c='b')
-        print(np.linalg.norm(self.F, axis=1))
+        is_out = np.where(pos[:, d] > boxsize)
+        pos[is_out, d] = boxsize - (pos[is_out, d] - boxsize)
+        vel[is_out, d] *= -1
 
-class wheel(phy_object):
-    def __init__(self, num=3, R=5):
-        phi = np.linspace(start=.0, stop=2*np.pi, num=num+1)[:-1]
-        xy = np.array([0, 12]) + np.stack([R * np.cos(phi), R * np.sin(phi)], axis=1)
-        ms = np.ones(num)
-        A = np.zeros((num, 2), dtype=int)
+    return (pos, vel)
 
-        A[:, 0] = np.roll(np.arange(num), 1)
-        A[:, 1] = np.roll(np.arange(num), -1)
+class body():
+    def __init__(self, pos, ci, cj):
+        # Simulation parameters
+        self.dt = 0.1  # timestep
+        self.spring_coeff = 40  # Hooke's law spring coefficient
+        self.gravity = -0.1  # strength of gravity
 
-        K = 0.6 * np.ones((num, 2))
-        g = np.array([0, -1])
-        super().__init__(xy, ms, A, K, g)
+        # construct spring nodes / initial conditions
+        self.pos = pos
+        self.vel = np.zeros(self.pos.shape)
+        self.acc = np.zeros(self.pos.shape)
 
-# Brief selfcheck demo
-if __name__ == "__main__":
-    from matplotlib import pyplot as plt
-    from celluloid import Camera
-    fig, (ax, ax_aux) = plt.subplots(2, 1)
-    camera = Camera(fig)
+        self.ci = ci
+        self.cj = cj
 
-    ax.set_aspect('equal')
-    ax.set_ylim(0, 40)
-    ax.set_xlim(-20, 20)
+        # calculate spring rest-lengths
+        self.springL = np.linalg.norm(self.pos[self.cj, :] - self.pos[self.ci, :], axis=1)
 
-    w = wheel()
+    def step(self, ax):
+        # (1/2) kick
+        self.vel += self.acc * self.dt / 2.0
 
-    for i in range(100):
-        w.show(ax, ax_aux)
-        w.step()
-        camera.snap()
+        # drift
+        self.pos += self.vel * self.dt
 
-    animation = camera.animate()
+        # apply boundary conditions
+        pos, vel = applyBoundary(self.pos, self.vel, 3)
+
+        # update accelerations
+        self.acc = getAcc(self.pos, self.vel, self.cj, self.ci, self.springL, self.spring_coeff, self.gravity)
+
+        # (1/2) kick
+        self.vel += self.acc * self.dt / 2.0
+
+        # plot in real time
+        if ax != None:
+            ax.cla()
+            ax.plot(pos[[self.ci, self.cj], 0], pos[[self.ci, self.cj], 1], color='blue')
+            ax.scatter(pos[:, 0], pos[:, 1], s=10, color='blue')
 
     plt.show()
+
+class ngrid_body(body):
+    def __init__(self, N):
+        # construct spring network connections
+        ci = []
+        cj = []
+        #  o--o
+        for r in range(0, N):
+            for c in range(0, N - 1):
+                idx_i = sub2ind([N, N], r, c)
+                idx_j = sub2ind([N, N], r, c + 1)
+                ci.append(idx_i)
+                cj.append(idx_j)
+        # o
+        # |
+        # o
+        for r in range(0, N - 1):
+            for c in range(0, N):
+                idx_i = sub2ind([N, N], r, c)
+                idx_j = sub2ind([N, N], r + 1, c)
+                ci.append(idx_i)
+                cj.append(idx_j)
+        # o
+        #   \
+        #     o
+        for r in range(0, N - 1):
+            for c in range(0, N - 1):
+                idx_i = sub2ind([N, N], r, c)
+                idx_j = sub2ind([N, N], r + 1, c + 1)
+                ci.append(idx_i)
+                cj.append(idx_j)
+        #     o
+        #   /
+        # o
+        for r in range(0, N - 1):
+            for c in range(0, N - 1):
+                idx_i = sub2ind([N, N], r + 1, c)
+                idx_j = sub2ind([N, N], r, c + 1)
+                ci.append(idx_i)
+                cj.append(idx_j)
+
+        xlin = np.linspace(1, 2, N)
+
+        x, y = np.meshgrid(xlin, xlin)
+        pos = np.vstack((x.flatten(), y.flatten())).T
+
+        super().__init__(pos=pos, ci=ci, cj=cj)
+
+class wheel_body(body):
+    def __init__(self, N, R):
+        a = np.linspace(start=0., stop=2*np.pi, num=N+1)[:-1]
+        pos = np.stack([R * np.cos(a), R * np.sin(a)], axis=1)
+        pos = np.concatenate([pos, np.array([[0., 0]])])
+        pos += R + 0.5
+
+        ci = np.arange(N).tolist()
+        cj = np.roll(np.arange(N), 1).tolist()
+
+        ci = ci + np.arange(N).tolist()
+        cj = cj + [N] * N
+
+        super().__init__(pos=pos, ci=ci, cj=cj)
+
+def main(Nt=400):
+    #b = body(pos=np.array([[1.01, 0.2], [1, 0.4], [1.5, 0.3]]), ci=[0, 1, 2], cj=[1, 2, 0])
+    #b = ngrid_body(5)
+    b = wheel_body(6, 0.6)
+
+    # prep figure
+    fig = plt.figure(figsize=(4, 4), dpi=80)
+    ax = fig.add_subplot(111)
+
+    # Simulation Main Loop
+    for i in range(Nt):
+        b.step(ax)
+        ax.set(xlim=(0, 3), ylim=(0, 3))
+        ax.set_aspect('equal', 'box')
+        ax.set_xticks([0, 1, 2, 3])
+        ax.set_yticks([0, 1, 2, 3])
+        plt.pause(0.001)
+
+    plt.show()
+
+if __name__ == "__main__":
+    main()
