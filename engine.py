@@ -12,7 +12,7 @@ def sub2ind(array_shape, i, j):
 
 
 # calculate acceleration on nodes using hooke's law + gravity
-def getAcc(pos, vel, ci, cj, springL, spring_coeff, gravity):
+def getAcc(pos, ci, cj, springL, spring_coeff, gravity):
     # initialize
     acc = np.zeros(pos.shape)
 
@@ -75,7 +75,7 @@ class body():
         pos, vel = applyBoundary(self.pos, self.vel, 3)
 
         # update accelerations
-        self.acc = getAcc(self.pos, self.vel, self.cj, self.ci, self.springL, self.spring_coeff, self.gravity)
+        self.acc = getAcc(self.pos, self.cj, self.ci, self.springL, self.spring_coeff, self.gravity)
 
         # (1/2) kick
         self.vel += self.acc * self.dt / 2.0
@@ -83,8 +83,36 @@ class body():
         # plot in real time
         if ax != None:
             ax.cla()
-            ax.plot(pos[[self.ci, self.cj], 0], pos[[self.ci, self.cj], 1], color='blue')
+            ax.plot(pos[[self.ci, self.cj], 0], pos[[self.ci, self.cj], 1], color='b')
             ax.scatter(pos[:, 0], pos[:, 1], s=10, color='blue')
+
+    def yoshida(self, ax):
+        w_0 = -(2 ** (1/3))/(2 - 2 ** (1/3))
+        w_1 = 1/(2 - 2 ** (1/3))
+        c1 = c4 = w_1/2
+        c2 = c3 = (w_0 + w_1)/2
+        d1 = d3 = w_1
+        d2 = w_0
+        dt = self.dt
+
+        pos1 = self.pos + c1 * self.vel * dt
+        vel1 = self.vel + d1 * getAcc(pos1, self.cj, self.ci, self.springL, self.spring_coeff, self.gravity) * dt
+        pos2 = pos1 + c2 * vel1 * dt
+        vel2 = vel1 + d2 * getAcc(pos2, self.cj, self.ci, self.springL, self.spring_coeff, self.gravity) * dt
+        pos3 = pos2 + c3 * vel2 * dt
+        vel3 = vel2 + d3 * getAcc(pos3, self.cj, self.ci, self.springL, self.spring_coeff, self.gravity) * dt
+
+        self.pos = pos3 + c4 * vel3 * dt
+        self.vel = vel3
+
+        # apply boundary conditions
+        self.pos, self.vel = applyBoundary(self.pos, self.vel, 3)
+
+        # plot in real time
+        if ax != None:
+            ax.cla()
+            ax.plot(self.pos[[self.ci, self.cj], 0], self.pos[[self.ci, self.cj], 1], color='b')
+            ax.scatter(self.pos[:, 0], self.pos[:, 1], s=10, color='blue')
 
     plt.show()
 
@@ -150,7 +178,7 @@ class wheel_body(body):
 
         super().__init__(pos=pos, ci=ci, cj=cj)
 
-def main(Nt=400):
+def main(Nt=4000):
     #b = body(pos=np.array([[1.01, 0.2], [1, 0.4], [1.5, 0.3]]), ci=[0, 1, 2], cj=[1, 2, 0])
     #b = ngrid_body(5)
     b = wheel_body(6, 0.6)
@@ -162,6 +190,7 @@ def main(Nt=400):
     # Simulation Main Loop
     for i in range(Nt):
         b.step(ax)
+        #b.yoshida(ax)
         ax.set(xlim=(0, 3), ylim=(0, 3))
         ax.set_aspect('equal', 'box')
         ax.set_xticks([0, 1, 2, 3])
